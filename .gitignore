@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode build output
+build/
+DerivedData/
+*.app
+
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CocoaPods (if ever added)
+Pods/
+Podfile.lock
