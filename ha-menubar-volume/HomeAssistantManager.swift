@@ -54,13 +54,36 @@ class HomeAssistantManager: ObservableObject {
         connectWebSocket()
     }
 
+    // MARK: - Pure Helpers (internal for testability)
+
+    /// Convert a REST/WebSocket base URL to its WebSocket equivalent.
+    static func wsURL(from baseURL: String) -> URL? {
+        let trimmed = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty else { return nil }
+        let wsBase = trimmed
+            .replacingOccurrences(of: "https://", with: "wss://")
+            .replacingOccurrences(of: "http://", with: "ws://")
+        return URL(string: "\(wsBase)/api/websocket")
+    }
+
+    /// Parse a Home Assistant `input_number` state string (0.0–1.0) into a 0–100 integer.
+    static func parseVolumeState(_ stateValue: String) -> Int? {
+        guard let value = Double(stateValue) else { return nil }
+        return Int(round(value * 100))
+    }
+
+    /// Parse a Home Assistant switch state string into a Bool.
+    static func parseMuteState(_ stateValue: String) -> Bool {
+        stateValue == "on"
+    }
+
     // MARK: - Generic API Helper
 
-    private func callService(domain: String, service: String, data: [String: Any], completion: @escaping (Bool, String?) -> Void) {
+    @discardableResult
+    private func callService(domain: String, service: String, data: [String: Any]) async -> (ok: Bool, error: String?) {
         let trimmedBase = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let url = URL(string: "\(trimmedBase)/api/services/\(domain)/\(service)") else {
-            completion(false, "Invalid URL")
-            return
+            return (false, "Invalid URL")
         }
 
         var request = URLRequest(url: url)
@@ -69,26 +92,26 @@ class HomeAssistantManager: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: data)
 
-        // Debug: print what we're sending
         let bodyStr = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "nil"
         print("[HA] POST \(url.absoluteString)")
         print("[HA] Body: \(bodyStr)")
 
-        session.dataTask(with: request) { data, response, error in
-            if let error {
-                print("[HA] Network error: \(error.localizedDescription)")
-                completion(false, error.localizedDescription)
-                return
-            }
-
+        do {
+            let (responseData, response) = try await session.data(for: request)
             let http = response as? HTTPURLResponse
             let statusCode = http?.statusCode ?? 0
-            let responseBody = data.flatMap { String(data: $0, encoding: .utf8) } ?? "(empty)"
+            let responseBody = String(data: responseData, encoding: .utf8) ?? "(empty)"
             print("[HA] Response: \(statusCode) — \(responseBody.prefix(200))")
 
-            let ok = (200...299).contains(statusCode)
-            completion(ok, ok ? nil : "HTTP \(statusCode): \(responseBody.prefix(120))")
-        }.resume()
+            if (200...299).contains(statusCode) {
+                return (true, nil)
+            } else {
+                return (false, "HTTP \(statusCode): \(responseBody.prefix(120))")
+            }
+        } catch {
+            print("[HA] Network error: \(error.localizedDescription)")
+            return (false, error.localizedDescription)
+        }
     }
 
     // MARK: - Set Volume
@@ -101,15 +124,14 @@ class HomeAssistantManager: ObservableObject {
 
         lastLocalVolumeChange = Date()
         let data: [String: Any] = ["entity_id": entityID, "value": Double(volume) / 100]
-        callService(domain: "input_number", service: "set_value", data: data) { [weak self] ok, error in
-            DispatchQueue.main.async {
-                if ok {
-                    self?.lastError = nil
-                    self?.currentRemoteVolume = volume
-                } else {
-                    // Don't touch isReachable — only the reachability loop controls that
-                    self?.lastError = error
-                }
+        Task {
+            let (ok, error) = await callService(domain: "input_number", service: "set_value", data: data)
+            if ok {
+                lastError = nil
+                currentRemoteVolume = volume
+            } else {
+                // Don't touch isReachable — only the reachability loop controls that
+                lastError = error
             }
         }
     }
@@ -125,13 +147,12 @@ class HomeAssistantManager: ObservableObject {
         lastLocalMuteChange = Date()
         let service = muted ? "turn_on" : "turn_off"
         let data: [String: Any] = ["entity_id": muteEntityID]
-        callService(domain: "switch", service: service, data: data) { [weak self] ok, error in
-            DispatchQueue.main.async {
-                if ok {
-                    self?.lastError = nil
-                } else {
-                    self?.lastError = error
-                }
+        Task {
+            let (ok, error) = await callService(domain: "switch", service: service, data: data)
+            if ok {
+                lastError = nil
+            } else {
+                lastError = error
             }
         }
     }
@@ -158,12 +179,9 @@ class HomeAssistantManager: ObservableObject {
 
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let stateStr = json["state"] as? String,
-               let value = Double(stateStr) {
-                let vol = Int(round(value * 100))
-                await MainActor.run {
-                    self.currentRemoteVolume = vol
-                    self.isReachable = true
-                }
+               let vol = Self.parseVolumeState(stateStr) {
+                currentRemoteVolume = vol
+                isReachable = true
                 return vol
             }
         } catch {
@@ -192,7 +210,7 @@ class HomeAssistantManager: ObservableObject {
     private func checkReachability() async {
         let trimmedBase = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard isConfigured, let url = URL(string: "\(trimmedBase)/api/") else {
-            await MainActor.run { self.isReachable = false }
+            isReachable = false
             return
         }
 
@@ -202,32 +220,18 @@ class HomeAssistantManager: ObservableObject {
         do {
             let (_, response) = try await session.data(for: request)
             let ok = (response as? HTTPURLResponse).map { (200...299).contains($0.statusCode) } ?? false
-            await MainActor.run {
-                self.isReachable = ok
-                if ok { self.lastError = nil }
-            }
+            isReachable = ok
+            if ok { lastError = nil }
         } catch {
-            await MainActor.run {
-                self.isReachable = false
-                self.lastError = error.localizedDescription
-            }
+            isReachable = false
+            lastError = error.localizedDescription
         }
     }
 
     // MARK: - WebSocket (real-time state sync)
 
-    /// Build the WebSocket URL from the REST base URL.
-    private func wsURL() -> URL? {
-        let trimmed = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        // http:// → ws://, https:// → wss://
-        let wsBase = trimmed
-            .replacingOccurrences(of: "https://", with: "wss://")
-            .replacingOccurrences(of: "http://", with: "ws://")
-        return URL(string: "\(wsBase)/api/websocket")
-    }
-
     func connectWebSocket() {
-        guard isConfigured, let url = wsURL() else { return }
+        guard isConfigured, let url = Self.wsURL(from: baseURL) else { return }
 
         // Tear down any existing connection
         webSocketTask?.cancel(with: .goingAway, reason: nil)
@@ -254,7 +258,7 @@ class HomeAssistantManager: ObservableObject {
         wsReconnectTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
             guard !Task.isCancelled else { return }
-            await MainActor.run { self.connectWebSocket() }
+            connectWebSocket()
         }
     }
 
@@ -292,8 +296,10 @@ class HomeAssistantManager: ObservableObject {
 
             case .failure(let error):
                 print("[HA WS] Receive error: \(error.localizedDescription)")
-                self.wsConnected = false
-                self.scheduleWSReconnect()
+                Task { @MainActor [weak self] in
+                    self?.wsConnected = false
+                    self?.scheduleWSReconnect()
+                }
             }
         }
     }
@@ -307,27 +313,27 @@ class HomeAssistantManager: ObservableObject {
 
         switch type {
         case "auth_required":
-            // Authenticate
             sendWSJSON(["type": "auth", "access_token": token])
 
         case "auth_ok":
             print("[HA WS] Authenticated")
-            wsConnected = true
-            // Subscribe to state_changed events
-            subscribeToStateChanges()
-            // Also fetch current state of both entities to ensure we're in sync
-            fetchCurrentStatesViaWS()
+            Task { @MainActor [weak self] in
+                self?.wsConnected = true
+                self?.subscribeToStateChanges()
+                self?.fetchCurrentStatesViaWS()
+            }
 
         case "auth_invalid":
             let msg = json["message"] as? String ?? "Invalid auth"
             print("[HA WS] Auth failed: \(msg)")
-            DispatchQueue.main.async { self.lastError = "WS auth: \(msg)" }
+            Task { @MainActor [weak self] in
+                self?.lastError = "WS auth: \(msg)"
+            }
 
         case "event":
             handleWSEvent(json)
 
         case "result":
-            // Result of a subscription or get_states call
             if let success = json["success"] as? Bool, !success {
                 let errMsg = (json["error"] as? [String: Any])?["message"] as? String ?? "Unknown"
                 print("[HA WS] Command failed: \(errMsg)")
@@ -350,7 +356,6 @@ class HomeAssistantManager: ObservableObject {
     /// Fetch current state of volume + mute entities right after connecting,
     /// so we're immediately in sync even if events were missed.
     private func fetchCurrentStatesViaWS() {
-        // Fetch volume entity
         let volID = nextWSID()
         sendWSJSON([
             "id": volID,
@@ -359,10 +364,9 @@ class HomeAssistantManager: ObservableObject {
             "service": "update_entity",
             "target": ["entity_id": entityID]
         ])
-        // Trigger a REST fetch to update local state
         Task {
             if let vol = await fetchCurrentVolume() {
-                await MainActor.run { self.currentRemoteVolume = vol }
+                currentRemoteVolume = vol
             }
             await fetchCurrentMuteState()
         }
@@ -385,8 +389,7 @@ class HomeAssistantManager: ObservableObject {
 
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let stateStr = json["state"] as? String {
-                let muted = stateStr == "on"
-                await MainActor.run { self.currentRemoteMute = muted }
+                currentRemoteMute = Self.parseMuteState(stateStr)
             }
         } catch {
             print("[HA] Fetch mute state error: \(error.localizedDescription)")
@@ -410,8 +413,7 @@ class HomeAssistantManager: ObservableObject {
     }
 
     private func handleVolumeStateChange(_ stateValue: String) {
-        guard let value = Double(stateValue) else { return }
-        let vol = Int(round(value * 100))
+        guard let vol = Self.parseVolumeState(stateValue) else { return }
         print("[HA WS] Volume entity changed → \(vol)")
 
         // Suppress echoes from our own commands
@@ -421,13 +423,13 @@ class HomeAssistantManager: ObservableObject {
             return
         }
 
-        DispatchQueue.main.async {
-            self.currentRemoteVolume = vol
+        Task { @MainActor [weak self] in
+            self?.currentRemoteVolume = vol
         }
     }
 
     private func handleMuteStateChange(_ stateValue: String) {
-        let muted = stateValue == "on"
+        let muted = Self.parseMuteState(stateValue)
         print("[HA WS] Mute entity changed → \(muted)")
 
         // Suppress echoes from our own commands
@@ -437,8 +439,8 @@ class HomeAssistantManager: ObservableObject {
             return
         }
 
-        DispatchQueue.main.async {
-            self.currentRemoteMute = muted
+        Task { @MainActor [weak self] in
+            self?.currentRemoteMute = muted
         }
     }
 }

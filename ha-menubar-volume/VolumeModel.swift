@@ -21,11 +21,25 @@ class VolumeModel: ObservableObject {
         let volume: Double
     }
 
-    let presets: [Preset] = [
+    static let defaultPresets: [Preset] = [
         Preset(name: "Background", icon: "speaker.wave.1",   volume: 50),
         Preset(name: "Listening",  icon: "speaker.wave.2",   volume: 75),
         Preset(name: "Loud",       icon: "speaker.wave.3",   volume: 100),
     ]
+
+    let presets: [Preset] = defaultPresets
+
+    // MARK: - Pure Helpers (internal for testability)
+
+    /// Clamp a raw volume value to the valid 0–100 range.
+    static func clamp(_ volume: Double) -> Double {
+        max(0, min(100, volume))
+    }
+
+    /// Return the name of the first preset within 2 units of the given volume, or nil.
+    static func activePreset(for volume: Double, in presets: [Preset]) -> String? {
+        presets.first(where: { abs($0.volume - volume) < 2 })?.name
+    }
 
     // MARK: - Private
 
@@ -113,7 +127,7 @@ class VolumeModel: ObservableObject {
     // MARK: - Actions
 
     func setVolume(_ newVolume: Double) {
-        let clamped = max(0, min(100, newVolume))
+        let clamped = Self.clamp(newVolume)
         volume = clamped
         activePreset = nil
         updateActivePreset()
@@ -148,6 +162,6 @@ class VolumeModel: ObservableObject {
     // MARK: - Helpers
 
     private func updateActivePreset() {
-        activePreset = presets.first(where: { abs($0.volume - volume) < 2 })?.name
+        activePreset = Self.activePreset(for: volume, in: presets)
     }
 }
