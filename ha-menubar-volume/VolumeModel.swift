@@ -22,9 +22,9 @@ class VolumeModel: ObservableObject {
     }
 
     let presets: [Preset] = [
-        Preset(name: "Background", icon: "speaker.wave.1",   volume: 40),
-        Preset(name: "Listening",  icon: "speaker.wave.2",   volume: 60),
-        Preset(name: "Loud",       icon: "speaker.wave.3",   volume: 80),
+        Preset(name: "Background", icon: "speaker.wave.1",   volume: 50),
+        Preset(name: "Listening",  icon: "speaker.wave.2",   volume: 75),
+        Preset(name: "Loud",       icon: "speaker.wave.3",   volume: 100),
     ]
 
     // MARK: - Private

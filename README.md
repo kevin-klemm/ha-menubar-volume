@@ -1,4 +1,4 @@
-# AmpVolume
+# HA Menubar Volume
 
 A native macOS menu bar app to control your RS232 amplifier volume via Home Assistant.
 
@@ -68,7 +68,7 @@ Click the gear icon in the popover footer to enter your HA base URL, access toke
 
 | File | Purpose |
 |---|---|
-| `AmpVolumeApp.swift` | App entry point, menu bar status item, popover, global hotkey, scroll-wheel handling |
+| `HAMenubarVolumeApp.swift` | App entry point, menu bar status item, popover, global hotkey, scroll-wheel handling |
 | `HomeAssistantManager.swift` | REST API calls, reachability loop, volume fetch, persisted config via `@AppStorage` |
 | `VolumeModel.swift` | Shared state, Combine debounce, presets, mute, volume stepping |
 | `VolumePopoverView.swift` | SwiftUI popover UI — main view, presets bar, settings panel, custom slider |

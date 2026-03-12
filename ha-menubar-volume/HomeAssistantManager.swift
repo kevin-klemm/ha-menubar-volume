@@ -159,7 +159,7 @@ class HomeAssistantManager: ObservableObject {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let stateStr = json["state"] as? String,
                let value = Double(stateStr) {
-                let vol = Int(value)
+                let vol = Int(round(value * 100))
                 await MainActor.run {
                     self.currentRemoteVolume = vol
                     self.isReachable = true
@@ -411,7 +411,7 @@ class HomeAssistantManager: ObservableObject {
 
     private func handleVolumeStateChange(_ stateValue: String) {
         guard let value = Double(stateValue) else { return }
-        let vol = Int(value)
+        let vol = Int(round(value * 100))
         print("[HA WS] Volume entity changed → \(vol)")
 
         // Suppress echoes from our own commands

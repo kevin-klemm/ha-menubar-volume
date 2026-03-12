@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 @main
-struct AmpVolumeApp: App {
+struct HAMenubarVolumeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
@@ -90,7 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func showContextMenu(from button: NSStatusBarButton) {
         let menu = NSMenu()
-        menu.addItem(withTitle: "About AmpVolume", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "About HA Menubar Volume", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
