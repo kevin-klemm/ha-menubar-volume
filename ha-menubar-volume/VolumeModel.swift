@@ -159,6 +159,23 @@ class VolumeModel: ObservableObject {
         }
     }
 
+    /// Fetch the latest volume + mute state from HA (called when the popover opens).
+    func refreshFromRemote() {
+        Task {
+            if let remoteVol = await ha.fetchCurrentVolume() {
+                let newVol = Double(remoteVol)
+                if abs(volume - newVol) >= 1.0 {
+                    volume = newVol
+                    updateActivePreset()
+                }
+            }
+            await ha.fetchCurrentMuteState()
+            if let muted = ha.currentRemoteMute, isMuted != muted {
+                isMuted = muted
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     private func updateActivePreset() {
