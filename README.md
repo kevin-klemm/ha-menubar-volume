@@ -1,6 +1,6 @@
 # HA Menubar Volume
 
-[![Build & Release](https://github.com/kklemm/ha-menubar-volume/actions/workflows/build.yml/badge.svg)](https://github.com/kklemm/ha-menubar-volume/actions/workflows/build.yml)
+[![Build & Release](https://github.com/kevin-klemm-simplisafe/ha-menubar-volume/actions/workflows/build.yml/badge.svg)](https://github.com/kklemm/ha-menubar-volume/actions/workflows/build.yml)
 [![macOS](https://img.shields.io/badge/macOS-14.0%2B-blue)](https://github.com/kklemm/ha-menubar-volume)
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
