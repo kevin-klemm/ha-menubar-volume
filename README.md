@@ -1,5 +1,10 @@
 # HA Menubar Volume
 
+[![Build & Release](https://github.com/kklemm/ha-menubar-volume/actions/workflows/build.yml/badge.svg)](https://github.com/kklemm/ha-menubar-volume/actions/workflows/build.yml)
+[![macOS](https://img.shields.io/badge/macOS-14.0%2B-blue)](https://github.com/kklemm/ha-menubar-volume)
+[![Swift](https://img.shields.io/badge/Swift-5.9-orange)](https://swift.org)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 A native macOS menu bar app to control a volume level via Home Assistant — backed by an `input_number` helper for the level and a `switch` for mute.
 
 ## How it works
@@ -50,20 +55,12 @@ input_boolean:
 
 HA → Your Profile (bottom left) → Long-Lived Access Tokens → Create Token
 
-### 3. Build in Xcode
+### 3. Download the app
 
-1. Open `ha-menubar-volume.xcodeproj`
-2. Build with ⌘R — the app appears in the menu bar (no Dock icon)
+Download the latest `ha-menubar-volume.zip` from the [Releases page](https://github.com/kklemm/ha-menubar-volume/releases), unzip it, and move `ha-menubar-volume.app` to your Applications folder.
+
+> **First launch:** macOS may show a security warning since the app isn't notarized. Right-click the app → Open → Open to bypass it once.
 
 ### 4. Configure
 
 Click the gear icon in the popover footer to enter your HA base URL, access token, and entity IDs. Settings persist across launches.
-
-## Files
-
-| File | Purpose |
-|---|---|
-| `HAMenubarVolumeApp.swift` | App entry point, menu bar status item, popover, global hotkey, scroll-wheel handling |
-| `HomeAssistantManager.swift` | REST API + WebSocket, reachability, state sync, persisted config via `@AppStorage` |
-| `VolumeModel.swift` | Shared state, Combine debounce, presets, mute, volume stepping |
-| `VolumePopoverView.swift` | SwiftUI popover UI — main view, presets bar, settings panel, custom slider |
