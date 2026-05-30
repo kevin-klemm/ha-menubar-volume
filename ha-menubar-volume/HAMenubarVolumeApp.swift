@@ -1,5 +1,8 @@
 import SwiftUI
 import AppKit
+import Combine
+import ServiceManagement
+import Sparkle
 
 @main
 struct HAMenubarVolumeApp: App {
@@ -17,6 +20,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var eventMonitor: Any?
+
+    /// Drives Sparkle automatic + manual update checks (feed URL and public key
+    /// come from Info.plist: SUFeedURL / SUPublicEDKey).
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide Dock icon — pure menu bar app
@@ -91,7 +102,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func showContextMenu(from button: NSStatusBarButton) {
         let menu = NSMenu()
-        menu.addItem(withTitle: "About Menubar Volume", action: nil, keyEquivalent: "")
+        let about = menu.addItem(withTitle: "About Menubar Volume", action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
+        let updates = menu.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        updates.target = updaterController
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
@@ -100,9 +114,54 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusItem.menu = nil
     }
 
+    @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
         }
+    }
+}
+
+// MARK: - Launch at Login
+
+/// Wraps `SMAppService` so the app can register itself as a login item,
+/// letting it start automatically after a reboot.
+final class LoginItemManager: ObservableObject {
+    static let shared = LoginItemManager()
+
+    @Published private(set) var isEnabled: Bool
+    @Published var lastError: String?
+
+    private init() {
+        isEnabled = SMAppService.mainApp.status == .enabled
+    }
+
+    /// Re-read the current registration status from the system.
+    func refresh() {
+        isEnabled = SMAppService.mainApp.status == .enabled
+    }
+
+    /// Register or unregister the app as a login item.
+    func setEnabled(_ enabled: Bool) {
+        do {
+            if enabled {
+                if SMAppService.mainApp.status != .enabled {
+                    try SMAppService.mainApp.register()
+                }
+            } else {
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                }
+            }
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+            Log.d("[LoginItem] \(enabled ? "register" : "unregister") failed: \(error.localizedDescription)")
+        }
+        refresh()
     }
 }

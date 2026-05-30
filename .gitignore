@@ -21,3 +21,6 @@ xcuserdata/
 # CocoaPods (if ever added)
 Pods/
 Podfile.lock
+
+# Sparkle update-signing private key — NEVER commit this
+sparkle_private_key.txt

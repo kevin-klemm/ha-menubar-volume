@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import Security
 
 /// Manages communication with Home Assistant via REST + WebSocket APIs.
 /// Stores configuration in UserDefaults so users can update settings from the UI.
@@ -20,8 +21,15 @@ class HomeAssistantManager: ObservableObject {
     @AppStorage("ha_entity_id") var entityID: String = "input_number.amplifier_volume"
     @AppStorage("ha_mute_entity_id") var muteEntityID: String = "switch.amplifier_mute"
 
-    /// Token stored separately — ideally move to Keychain for production use.
-    @AppStorage("ha_token") var token: String = ""
+    /// Long-lived access token, backed by the Keychain rather than plaintext UserDefaults.
+    @Published var token: String = "" {
+        didSet {
+            guard token != oldValue else { return }
+            Keychain.set(token, account: Self.tokenKeychainKey)
+        }
+    }
+
+    private static let tokenKeychainKey = "ha_token"
 
     var isConfigured: Bool {
         !baseURL.isEmpty && !token.isEmpty && !entityID.isEmpty
@@ -49,6 +57,16 @@ class HomeAssistantManager: ObservableObject {
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 15
         session = URLSession(configuration: config)
+
+        // Load the token from the Keychain, migrating any value previously stored
+        // in plaintext UserDefaults by older builds.
+        if let stored = Keychain.get(account: Self.tokenKeychainKey) {
+            token = stored
+        } else if let legacy = UserDefaults.standard.string(forKey: Self.tokenKeychainKey),
+                  !legacy.isEmpty {
+            token = legacy // didSet writes it to the Keychain
+            UserDefaults.standard.removeObject(forKey: Self.tokenKeychainKey)
+        }
 
         startReachabilityLoop()
         connectWebSocket()
@@ -93,15 +111,15 @@ class HomeAssistantManager: ObservableObject {
         request.httpBody = try? JSONSerialization.data(withJSONObject: data)
 
         let bodyStr = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "nil"
-        print("[HA] POST \(url.absoluteString)")
-        print("[HA] Body: \(bodyStr)")
+        Log.d("[HA] POST \(url.absoluteString)")
+        Log.d("[HA] Body: \(bodyStr)")
 
         do {
             let (responseData, response) = try await session.data(for: request)
             let http = response as? HTTPURLResponse
             let statusCode = http?.statusCode ?? 0
             let responseBody = String(data: responseData, encoding: .utf8) ?? "(empty)"
-            print("[HA] Response: \(statusCode) — \(responseBody.prefix(200))")
+            Log.d("[HA] Response: \(statusCode) — \(responseBody.prefix(200))")
 
             if (200...299).contains(statusCode) {
                 return (true, nil)
@@ -109,7 +127,7 @@ class HomeAssistantManager: ObservableObject {
                 return (false, "HTTP \(statusCode): \(responseBody.prefix(120))")
             }
         } catch {
-            print("[HA] Network error: \(error.localizedDescription)")
+            Log.d("[HA] Network error: \(error.localizedDescription)")
             return (false, error.localizedDescription)
         }
     }
@@ -168,12 +186,12 @@ class HomeAssistantManager: ObservableObject {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        print("[HA] GET \(url.absoluteString)")
+        Log.d("[HA] GET \(url.absoluteString)")
 
         do {
             let (data, response) = try await session.data(for: request)
             let http = response as? HTTPURLResponse
-            print("[HA] States response: \(http?.statusCode ?? 0)")
+            Log.d("[HA] States response: \(http?.statusCode ?? 0)")
 
             guard let http, (200...299).contains(http.statusCode) else { return nil }
 
@@ -185,7 +203,7 @@ class HomeAssistantManager: ObservableObject {
                 return vol
             }
         } catch {
-            print("[HA] Fetch volume error: \(error.localizedDescription)")
+            Log.d("[HA] Fetch volume error: \(error.localizedDescription)")
         }
         return nil
     }
@@ -238,7 +256,7 @@ class HomeAssistantManager: ObservableObject {
         wsConnected = false
         wsMessageID = 0
 
-        print("[HA WS] Connecting to \(url.absoluteString)")
+        Log.d("[HA WS] Connecting to \(url.absoluteString)")
 
         webSocketTask = session.webSocketTask(with: url)
         webSocketTask?.resume()
@@ -270,9 +288,9 @@ class HomeAssistantManager: ObservableObject {
     private func sendWSJSON(_ dict: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let text = String(data: data, encoding: .utf8) else { return }
-        print("[HA WS] >>> \(text.prefix(200))")
+        Log.d("[HA WS] >>> \(text.prefix(200))")
         webSocketTask?.send(.string(text)) { error in
-            if let error { print("[HA WS] Send error: \(error.localizedDescription)") }
+            if let error { Log.d("[HA WS] Send error: \(error.localizedDescription)") }
         }
     }
 
@@ -295,7 +313,7 @@ class HomeAssistantManager: ObservableObject {
                 self.receiveWSMessage()
 
             case .failure(let error):
-                print("[HA WS] Receive error: \(error.localizedDescription)")
+                Log.d("[HA WS] Receive error: \(error.localizedDescription)")
                 Task { @MainActor [weak self] in
                     self?.wsConnected = false
                     self?.scheduleWSReconnect()
@@ -309,14 +327,14 @@ class HomeAssistantManager: ObservableObject {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else { return }
 
-        print("[HA WS] <<< type=\(type)")
+        Log.d("[HA WS] <<< type=\(type)")
 
         switch type {
         case "auth_required":
             sendWSJSON(["type": "auth", "access_token": token])
 
         case "auth_ok":
-            print("[HA WS] Authenticated")
+            Log.d("[HA WS] Authenticated")
             Task { @MainActor [weak self] in
                 self?.wsConnected = true
                 self?.subscribeToStateChanges()
@@ -325,7 +343,7 @@ class HomeAssistantManager: ObservableObject {
 
         case "auth_invalid":
             let msg = json["message"] as? String ?? "Invalid auth"
-            print("[HA WS] Auth failed: \(msg)")
+            Log.d("[HA WS] Auth failed: \(msg)")
             Task { @MainActor [weak self] in
                 self?.lastError = "WS auth: \(msg)"
             }
@@ -336,7 +354,7 @@ class HomeAssistantManager: ObservableObject {
         case "result":
             if let success = json["success"] as? Bool, !success {
                 let errMsg = (json["error"] as? [String: Any])?["message"] as? String ?? "Unknown"
-                print("[HA WS] Command failed: \(errMsg)")
+                Log.d("[HA WS] Command failed: \(errMsg)")
             }
 
         default:
@@ -392,7 +410,7 @@ class HomeAssistantManager: ObservableObject {
                 currentRemoteMute = Self.parseMuteState(stateStr)
             }
         } catch {
-            print("[HA] Fetch mute state error: \(error.localizedDescription)")
+            Log.d("[HA] Fetch mute state error: \(error.localizedDescription)")
         }
     }
 
@@ -414,12 +432,12 @@ class HomeAssistantManager: ObservableObject {
 
     private func handleVolumeStateChange(_ stateValue: String) {
         guard let vol = Self.parseVolumeState(stateValue) else { return }
-        print("[HA WS] Volume entity changed → \(vol)")
+        Log.d("[HA WS] Volume entity changed → \(vol)")
 
         // Suppress echoes from our own commands
         let elapsed = Date().timeIntervalSince(lastLocalVolumeChange)
         guard elapsed > echoSuppressionWindow else {
-            print("[HA WS] Suppressing volume echo (sent \(String(format: "%.1f", elapsed))s ago)")
+            Log.d("[HA WS] Suppressing volume echo (sent \(String(format: "%.1f", elapsed))s ago)")
             return
         }
 
@@ -430,17 +448,66 @@ class HomeAssistantManager: ObservableObject {
 
     private func handleMuteStateChange(_ stateValue: String) {
         let muted = Self.parseMuteState(stateValue)
-        print("[HA WS] Mute entity changed → \(muted)")
+        Log.d("[HA WS] Mute entity changed → \(muted)")
 
         // Suppress echoes from our own commands
         let elapsed = Date().timeIntervalSince(lastLocalMuteChange)
         guard elapsed > echoSuppressionWindow else {
-            print("[HA WS] Suppressing mute echo (sent \(String(format: "%.1f", elapsed))s ago)")
+            Log.d("[HA WS] Suppressing mute echo (sent \(String(format: "%.1f", elapsed))s ago)")
             return
         }
 
         Task { @MainActor [weak self] in
             self?.currentRemoteMute = muted
         }
+    }
+}
+
+// MARK: - Debug Logging
+
+/// Lightweight logger that only emits in DEBUG builds, so release builds don't
+/// write request bodies and entity state to the system log.
+enum Log {
+    static func d(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        Swift.print(message())
+        #endif
+    }
+}
+
+// MARK: - Keychain
+
+/// Minimal generic-password Keychain wrapper for storing the HA access token.
+enum Keychain {
+    private static let service = "kklemm.ha-menubar-volume"
+
+    private static func baseQuery(account: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+    }
+
+    /// Store (or, for an empty value, delete) a string for the given account.
+    static func set(_ value: String, account: String) {
+        SecItemDelete(baseQuery(account: account) as CFDictionary)
+        guard !value.isEmpty else { return }
+        var attributes = baseQuery(account: account)
+        attributes[kSecValueData as String] = Data(value.utf8)
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(attributes as CFDictionary, nil)
+    }
+
+    /// Fetch the stored string for the given account, or nil if absent.
+    static func get(account: String) -> String? {
+        var query = baseQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }

@@ -5,13 +5,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # Create a release when a version tag is pushed
+  # Build, sign the update, and attach assets when a version tag is released
   release:
     types: [published]
 
 jobs:
   build-and-test:
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +32,18 @@ jobs:
           xcodebuild -version
           sw_vers
 
+      - name: Derive version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            VERSION="${TAG#v}"            # strip a leading "v" (v1.2.3 -> 1.2.3)
+          else
+            VERSION="0.0.0"               # untagged dev build
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Marketing version: $VERSION  (build ${{ github.run_number }})"
+
       - name: Build
         run: |
           xcodebuild build \
@@ -38,9 +52,13 @@ jobs:
             -configuration Release \
             -derivedDataPath build \
             MACOSX_DEPLOYMENT_TARGET=14.0 \
+            MARKETING_VERSION="${{ steps.ver.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=YES
 
       - name: Run tests
         run: |
@@ -54,30 +72,56 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Package app
+      - name: Create DMG
         run: |
-          APP_PATH="build/Build/Products/Release/ha-menubar-volume.app"
-          ditto -c -k --keepParent "$APP_PATH" ha-menubar-volume.zip
+          APP="build/Build/Products/Release/ha-menubar-volume.app"
+          STAGING="dmg-staging"
+          rm -rf "$STAGING" && mkdir -p "$STAGING"
+          cp -R "$APP" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create \
+            -volname "Menubar Volume" \
+            -srcfolder "$STAGING" \
+            -ov -format UDZO \
+            "ha-menubar-volume.dmg"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ha-menubar-volume
-          path: ha-menubar-volume.zip
+          name: ha-menubar-volume-dmg
+          path: ha-menubar-volume.dmg
 
-  release:
-    needs: build-and-test
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ha-menubar-volume
+      # --- Release-only: sign the update and publish the Sparkle appcast ---
 
-      - name: Attach to release
+      - name: Generate signed appcast
+        if: github.event_name == 'release'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY secret is not set — cannot sign the update."
+            echo "Add the contents of sparkle_private_key.txt as a repo secret named SPARKLE_PRIVATE_KEY."
+            exit 1
+          fi
+          TOOLS="build/SourcePackages/artifacts/sparkle/Sparkle/bin"
+          TAG="${{ github.event.release.tag_name }}"
+          UPDATES="updates"
+          mkdir -p "$UPDATES"
+          cp "ha-menubar-volume.dmg" "$UPDATES/"
+          # generate_appcast reads the EdDSA private key from stdin via "--ed-key-file -"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | "$TOOLS/generate_appcast" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/$TAG/" \
+            --link "https://github.com/${{ github.repository }}" \
+            "$UPDATES"
+          cp "$UPDATES/appcast.xml" appcast.xml
+          echo "Generated appcast:"
+          cat appcast.xml
+
+      - name: Attach assets to release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: ha-menubar-volume.zip
+          files: |
+            ha-menubar-volume.dmg
+            appcast.xml

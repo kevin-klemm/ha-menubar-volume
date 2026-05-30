@@ -4,6 +4,7 @@ import AppKit
 struct VolumePopoverView: View {
     @ObservedObject private var model = VolumeModel.shared
     @ObservedObject private var ha = HomeAssistantManager.shared
+    @ObservedObject private var loginItem = LoginItemManager.shared
     @State private var showSettings = false
 
     var body: some View {
@@ -275,6 +276,26 @@ struct VolumePopoverView: View {
                     Text(statusText)
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
+                }
+
+                Divider()
+
+                Toggle(isOn: Binding(
+                    get: { loginItem.isEnabled },
+                    set: { loginItem.setEnabled($0) }
+                )) {
+                    Text("Launch at login")
+                        .font(.system(size: 12))
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .onAppear { loginItem.refresh() }
+
+                if let loginError = loginItem.lastError {
+                    Text(loginError)
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange)
+                        .lineLimit(2)
                 }
 
                 Text("Shortcut: ⌥⌘V to toggle popover\nScroll on menu bar icon to adjust")
