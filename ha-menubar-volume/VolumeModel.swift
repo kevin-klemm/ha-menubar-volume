@@ -128,6 +128,12 @@ class VolumeModel: ObservableObject {
 
     func setVolume(_ newVolume: Double) {
         let clamped = Self.clamp(newVolume)
+        // Adjusting the volume implicitly unmutes — otherwise the debounced HA
+        // write (which is suppressed while muted) would silently drop the change.
+        if isMuted {
+            isMuted = false
+            ha.setMute(false)
+        }
         volume = clamped
         activePreset = nil
         updateActivePreset()

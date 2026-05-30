@@ -43,13 +43,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        // Popover
+        // Popover — auto-sizes to the SwiftUI content's fitting height
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 280, height: 380)
+        popover.contentSize = NSSize(width: 280, height: 280)
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: VolumePopoverView())
+        let hosting = NSHostingController(rootView: VolumePopoverView())
+        hosting.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = hosting
 
         // Close popover when clicking outside
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in

@@ -27,8 +27,6 @@ struct VolumePopoverView: View {
             Divider()
             volumeSection
             Divider()
-            presetsSection
-            Divider()
             footer
         }
     }
@@ -142,50 +140,10 @@ struct VolumePopoverView: View {
     private func stepButton(icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 24, weight: .semibold))
                 .foregroundColor(.secondary)
-                .frame(width: 30, height: 30)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .disabled(!ha.isReachable)
-    }
-
-    // MARK: - Presets
-
-    private var presetsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("PRESETS")
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(.secondary)
-
-            HStack(spacing: 6) {
-                ForEach(model.presets) { preset in
-                    presetButton(preset)
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-    }
-
-    private func presetButton(_ preset: VolumeModel.Preset) -> some View {
-        let isActive = model.activePreset == preset.name && !model.isMuted
-
-        return Button(action: { model.applyPreset(preset) }) {
-            VStack(spacing: 4) {
-                Image(systemName: preset.icon)
-                    .font(.system(size: 13))
-                Text(preset.name)
-                    .font(.system(size: 9, weight: .medium))
-            }
-            .foregroundColor(isActive ? .white : .secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isActive ? Color.accentColor : Color.primary.opacity(0.05))
-            )
+                .frame(width: 60, height: 60)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain)
         .disabled(!ha.isReachable)

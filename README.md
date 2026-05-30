@@ -7,6 +7,10 @@
 
 A native macOS menu bar app to control a volume level via Home Assistant — backed by an `input_number` helper for the level and a `switch` for mute.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="Menu bar volume popover" width="296">
+</p>
+
 ## How it works
 
 Mac menu bar → HA REST API + WebSocket → `input_number` (volume) + `switch` (mute)
