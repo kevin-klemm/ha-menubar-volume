@@ -43,7 +43,6 @@ class VolumeModel: ObservableObject {
 
     // MARK: - Private
 
-    private var preMuteVolume: Double = 50
     private let ha = HomeAssistantManager.shared
     private var volumeSubject = PassthroughSubject<Double, Never>()
     private var cancellables = Set<AnyCancellable>()
@@ -93,24 +92,8 @@ class VolumeModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Sync initial volume from HA on launch
-        Task {
-            if let remoteVol = await ha.fetchCurrentVolume() {
-                await MainActor.run {
-                    self.volume = Double(remoteVol)
-                    self.hasSyncedInitialVolume = true
-                    self.updateActivePreset()
-                }
-            } else {
-                await MainActor.run {
-                    self.hasSyncedInitialVolume = true
-                }
-            }
-            await ha.fetchCurrentMuteState()
-            if let muted = await MainActor.run(body: { self.ha.currentRemoteMute }) {
-                await MainActor.run { self.isMuted = muted }
-            }
-        }
+        // Pull authoritative state from HA on launch
+        syncFromRemote()
     }
 
     /// Mark that changes are originating locally; auto-resets after a delay.
@@ -156,28 +139,30 @@ class VolumeModel: ObservableObject {
     func toggleMute() {
         markLocalChange()
         isMuted.toggle()
-        if isMuted {
-            preMuteVolume = volume
-            ha.setMute(true)
-        } else {
-            volume = preMuteVolume
-            ha.setMute(false)
-        }
+        // media_player mute is independent of volume_level — the player keeps its
+        // level while muted, so there's nothing to save/restore here.
+        ha.setMute(isMuted)
     }
 
-    /// Fetch the latest volume + mute state from HA (called when the popover opens).
-    func refreshFromRemote() {
+    /// Pull the authoritative volume + mute from HA (one request) and snap the UI
+    /// to it. Called on launch and every time the popover opens. Skips applying
+    /// while a local change is still settling, so it never clobbers a fresh adjustment.
+    func syncFromRemote() {
         Task {
-            if let remoteVol = await ha.fetchCurrentVolume() {
+            let (remoteVol, remoteMuted) = await ha.fetchCurrentState()
+            hasSyncedInitialVolume = true
+
+            guard !isLocalChange else { return }
+
+            if let remoteVol {
                 let newVol = Double(remoteVol)
-                if abs(volume - newVol) >= 1.0 {
+                if volume != newVol {
                     volume = newVol
                     updateActivePreset()
                 }
             }
-            await ha.fetchCurrentMuteState()
-            if let muted = ha.currentRemoteMute, isMuted != muted {
-                isMuted = muted
+            if let remoteMuted, isMuted != remoteMuted {
+                isMuted = remoteMuted
             }
         }
     }

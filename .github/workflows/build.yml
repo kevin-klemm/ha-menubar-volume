@@ -74,13 +74,13 @@ jobs:
 
       - name: Create DMG
         run: |
-          APP="build/Build/Products/Release/ha-menubar-volume.app"
+          APP="build/Build/Products/Release/Home Assistant Volume.app"
           STAGING="dmg-staging"
           rm -rf "$STAGING" && mkdir -p "$STAGING"
           cp -R "$APP" "$STAGING/"
           ln -s /Applications "$STAGING/Applications"
           hdiutil create \
-            -volname "Menubar Volume" \
+            -volname "Home Assistant Volume" \
             -srcfolder "$STAGING" \
             -ov -format UDZO \
             "ha-menubar-volume.dmg"

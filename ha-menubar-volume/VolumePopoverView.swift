@@ -36,9 +36,11 @@ struct VolumePopoverView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("AMPLIFIER")
+                Text(ha.displayName.uppercased())
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
             Spacer()
             connectionBadge
@@ -212,11 +214,16 @@ struct VolumePopoverView: View {
             VStack(alignment: .leading, spacing: 14) {
                 settingsField(label: "HA Base URL", text: $ha.baseURL, placeholder: "http://homeassistant.local:8123")
                 settingsField(label: "Access Token", text: $ha.token, placeholder: "Long-lived access token", isSecure: true)
-                settingsField(label: "Volume Entity", text: $ha.entityID, placeholder: "input_number.amplifier_volume")
-                settingsField(label: "Mute Switch Entity", text: $ha.muteEntityID, placeholder: "switch.amplifier_mute")
+                settingsField(label: "Media Player Entity", text: $ha.entityID, placeholder: "media_player.living_room")
+                    .onChange(of: ha.entityID) { _, _ in
+                        // Stale result/name shouldn't linger while the user edits the entity.
+                        ha.entityStatus = .unknown
+                        ha.friendlyName = nil
+                    }
 
                 Button(action: {
                     ha.restartReachability()
+                    Task { await ha.validateEntity() }
                 }) {
                     Text("Test Connection")
                         .font(.system(size: 12, weight: .medium))
@@ -227,13 +234,11 @@ struct VolumePopoverView: View {
                 }
                 .buttonStyle(.plain)
 
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 6, height: 6)
-                    Text(statusText)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                HStack(spacing: 14) {
+                    statusDot(color: statusColor, text: statusText)
+                    if ha.entityStatus != .unknown {
+                        statusDot(color: entityStatusColor, text: entityStatusText)
+                    }
                 }
 
                 Divider()
@@ -262,6 +267,41 @@ struct VolumePopoverView: View {
                     .lineSpacing(2)
             }
             .padding(16)
+            .onAppear { Task { await ha.validateEntity() } }
+        }
+    }
+
+    /// A colored dot followed by secondary-colored text (shared status style).
+    private func statusDot(color: Color, text: String) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(text)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private var entityStatusColor: Color {
+        switch ha.entityStatus {
+        case .ok:        return .green
+        case .checking:  return .gray
+        case .unknown:   return .clear
+        default:         return .orange
+        }
+    }
+
+    private var entityStatusText: String {
+        switch ha.entityStatus {
+        case .unknown:         return ""
+        case .checking:        return "Checking entity…"
+        case .ok(let name):    return "Found “\(name)”"
+        case .notFound:        return "Entity not found"
+        case .wrongDomain:     return "Not a media_player"
+        case .noVolumeSupport: return "No volume support"
+        case .error(let msg):  return msg
         }
     }
 

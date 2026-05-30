@@ -3,6 +3,17 @@ import SwiftUI
 import Combine
 import Security
 
+/// Result of validating the configured entity against Home Assistant.
+enum EntityStatus: Equatable {
+    case unknown            // not checked yet
+    case checking
+    case ok(String)         // exists & supports volume; payload is the friendly name
+    case notFound           // entity_id doesn't exist in HA
+    case wrongDomain        // not a media_player.* entity
+    case noVolumeSupport    // media_player that can't set volume
+    case error(String)
+}
+
 /// Manages communication with Home Assistant via REST + WebSocket APIs.
 /// Stores configuration in UserDefaults so users can update settings from the UI.
 class HomeAssistantManager: ObservableObject {
@@ -14,12 +25,22 @@ class HomeAssistantManager: ObservableObject {
     @Published var lastError: String?
     @Published var currentRemoteVolume: Int?
     @Published var currentRemoteMute: Bool?
+    @Published var entityStatus: EntityStatus = .unknown
+    /// The entity's `friendly_name` from HA, once known.
+    @Published var friendlyName: String?
+
+    /// Name to show in the popover header: the HA friendly name when known,
+    /// otherwise a readable fallback derived from the entity_id.
+    var displayName: String {
+        if let friendlyName, !friendlyName.isEmpty { return friendlyName }
+        return Self.displayName(forEntityID: entityID)
+    }
 
     // MARK: - Configuration (persisted in UserDefaults)
 
     @AppStorage("ha_base_url") var baseURL: String = "http://homeassistant.local:8123"
-    @AppStorage("ha_entity_id") var entityID: String = "input_number.amplifier_volume"
-    @AppStorage("ha_mute_entity_id") var muteEntityID: String = "switch.amplifier_mute"
+    /// A `media_player` entity (a single player or an HA media_player group).
+    @AppStorage("ha_entity_id") var entityID: String = "media_player.living_room"
 
     /// Long-lived access token, backed by the Keychain rather than plaintext UserDefaults.
     @Published var token: String = "" {
@@ -84,15 +105,30 @@ class HomeAssistantManager: ObservableObject {
         return URL(string: "\(wsBase)/api/websocket")
     }
 
-    /// Parse a Home Assistant `input_number` state string (0.0–1.0) into a 0–100 integer.
-    static func parseVolumeState(_ stateValue: String) -> Int? {
-        guard let value = Double(stateValue) else { return nil }
-        return Int(round(value * 100))
+    /// Convert a `media_player` `volume_level` attribute (0.0–1.0) into a 0–100 integer.
+    /// Returns nil when the attribute is missing (e.g. the player is off).
+    static func parseVolumeLevel(_ value: Any?) -> Int? {
+        guard let level = value as? Double else { return nil }
+        return Int(round(level * 100))
     }
 
-    /// Parse a Home Assistant switch state string into a Bool.
-    static func parseMuteState(_ stateValue: String) -> Bool {
-        stateValue == "on"
+    /// Read a `media_player` `is_volume_muted` attribute into a Bool.
+    static func parseMuteFlag(_ value: Any?) -> Bool {
+        value as? Bool ?? false
+    }
+
+    /// Whether a `media_player`'s `supported_features` bitmask includes VOLUME_SET (4).
+    static func supportsVolumeSet(_ supportedFeatures: Int?) -> Bool {
+        guard let features = supportedFeatures else { return false }
+        return (features & 4) != 0 // MediaPlayerEntityFeature.VOLUME_SET
+    }
+
+    /// Derive a readable label from an entity_id, e.g.
+    /// `media_player.living_room` → "Living Room".
+    static func displayName(forEntityID entityID: String) -> String {
+        let slug = entityID.split(separator: ".").last.map(String.init) ?? entityID
+        let words = slug.split(separator: "_").map { $0.capitalized }
+        return words.isEmpty ? entityID : words.joined(separator: " ")
     }
 
     // MARK: - Generic API Helper
@@ -141,9 +177,9 @@ class HomeAssistantManager: ObservableObject {
         }
 
         lastLocalVolumeChange = Date()
-        let data: [String: Any] = ["entity_id": entityID, "value": Double(volume) / 100]
+        let data: [String: Any] = ["entity_id": entityID, "volume_level": Double(volume) / 100]
         Task {
-            let (ok, error) = await callService(domain: "input_number", service: "set_value", data: data)
+            let (ok, error) = await callService(domain: "media_player", service: "volume_set", data: data)
             if ok {
                 lastError = nil
                 currentRemoteVolume = volume
@@ -154,19 +190,18 @@ class HomeAssistantManager: ObservableObject {
         }
     }
 
-    // MARK: - Mute Switch
+    // MARK: - Mute
 
     func setMute(_ muted: Bool) {
-        guard isConfigured, !muteEntityID.isEmpty else {
-            lastError = "Mute entity not configured"
+        guard isConfigured else {
+            lastError = "Not configured"
             return
         }
 
         lastLocalMuteChange = Date()
-        let service = muted ? "turn_on" : "turn_off"
-        let data: [String: Any] = ["entity_id": muteEntityID]
+        let data: [String: Any] = ["entity_id": entityID, "is_volume_muted": muted]
         Task {
-            let (ok, error) = await callService(domain: "switch", service: service, data: data)
+            let (ok, error) = await callService(domain: "media_player", service: "volume_mute", data: data)
             if ok {
                 lastError = nil
             } else {
@@ -175,13 +210,17 @@ class HomeAssistantManager: ObservableObject {
         }
     }
 
-    // MARK: - Fetch Current Volume
+    // MARK: - Fetch Current State
 
-    func fetchCurrentVolume() async -> Int? {
-        guard isConfigured else { return nil }
+    /// Read the media_player's current volume + mute from HA in a single request,
+    /// so both reflect the same snapshot. Returns nil for an attribute the player
+    /// doesn't expose (e.g. while it's off). Updates the published mirrors too.
+    @discardableResult
+    func fetchCurrentState() async -> (volume: Int?, muted: Bool?) {
+        guard isConfigured else { return (nil, nil) }
 
         let trimmedBase = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "\(trimmedBase)/api/states/\(entityID)") else { return nil }
+        guard let url = URL(string: "\(trimmedBase)/api/states/\(entityID)") else { return (nil, nil) }
 
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -193,19 +232,77 @@ class HomeAssistantManager: ObservableObject {
             let http = response as? HTTPURLResponse
             Log.d("[HA] States response: \(http?.statusCode ?? 0)")
 
-            guard let http, (200...299).contains(http.statusCode) else { return nil }
+            guard let http, (200...299).contains(http.statusCode) else { return (nil, nil) }
+            isReachable = true
 
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let stateStr = json["state"] as? String,
-               let vol = Self.parseVolumeState(stateStr) {
-                currentRemoteVolume = vol
-                isReachable = true
-                return vol
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let attributes = json["attributes"] as? [String: Any] else { return (nil, nil) }
+
+            if let name = attributes["friendly_name"] as? String { friendlyName = name }
+            let vol = Self.parseVolumeLevel(attributes["volume_level"])
+            let muted = attributes["is_volume_muted"] != nil ? Self.parseMuteFlag(attributes["is_volume_muted"]) : nil
+            if let vol { currentRemoteVolume = vol }
+            if let muted { currentRemoteMute = muted }
+            return (vol, muted)
+        } catch {
+            Log.d("[HA] Fetch state error: \(error.localizedDescription)")
+            return (nil, nil)
+        }
+    }
+
+    // MARK: - Entity Validation
+
+    /// Verify the configured entity exists in HA, is a media_player, and supports
+    /// volume. Result is published via `entityStatus` for the Settings UI.
+    func validateEntity() async {
+        guard isConfigured else {
+            entityStatus = .error("Enter a URL, token, and entity")
+            return
+        }
+        guard entityID.hasPrefix("media_player.") else {
+            entityStatus = .wrongDomain
+            return
+        }
+
+        entityStatus = .checking
+
+        let trimmedBase = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(trimmedBase)/api/states/\(entityID)") else {
+            entityStatus = .error("Invalid URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+
+            if code == 404 {
+                entityStatus = .notFound
+                return
+            }
+            guard (200...299).contains(code) else {
+                entityStatus = .error("HTTP \(code)")
+                return
+            }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let attributes = json["attributes"] as? [String: Any] else {
+                entityStatus = .error("Unexpected response")
+                return
+            }
+
+            let name = (attributes["friendly_name"] as? String) ?? entityID
+            friendlyName = attributes["friendly_name"] as? String
+            if Self.supportsVolumeSet(attributes["supported_features"] as? Int) {
+                entityStatus = .ok(name)
+            } else {
+                entityStatus = .noVolumeSupport
             }
         } catch {
-            Log.d("[HA] Fetch volume error: \(error.localizedDescription)")
+            entityStatus = .error(error.localizedDescription)
         }
-        return nil
     }
 
     // MARK: - Reachability (sole controller of isReachable)
@@ -371,8 +468,8 @@ class HomeAssistantManager: ObservableObject {
         ])
     }
 
-    /// Fetch current state of volume + mute entities right after connecting,
-    /// so we're immediately in sync even if events were missed.
+    /// Fetch current state right after connecting, so we're immediately in sync
+    /// even if events were missed. Asks HA to refresh the entity first.
     private func fetchCurrentStatesViaWS() {
         let volID = nextWSID()
         sendWSJSON([
@@ -382,36 +479,7 @@ class HomeAssistantManager: ObservableObject {
             "service": "update_entity",
             "target": ["entity_id": entityID]
         ])
-        Task {
-            if let vol = await fetchCurrentVolume() {
-                currentRemoteVolume = vol
-            }
-            await fetchCurrentMuteState()
-        }
-    }
-
-    // MARK: - Fetch Current Mute State
-
-    func fetchCurrentMuteState() async {
-        guard isConfigured, !muteEntityID.isEmpty else { return }
-
-        let trimmedBase = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "\(trimmedBase)/api/states/\(muteEntityID)") else { return }
-
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return }
-
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let stateStr = json["state"] as? String {
-                currentRemoteMute = Self.parseMuteState(stateStr)
-            }
-        } catch {
-            Log.d("[HA] Fetch mute state error: \(error.localizedDescription)")
-        }
+        Task { await fetchCurrentState() }
     }
 
     // MARK: - WebSocket Event Handling
@@ -420,19 +488,20 @@ class HomeAssistantManager: ObservableObject {
         guard let event = json["event"] as? [String: Any],
               let eventData = event["data"] as? [String: Any],
               let changedEntityID = eventData["entity_id"] as? String,
+              changedEntityID == entityID,
               let newState = eventData["new_state"] as? [String: Any],
-              let stateValue = newState["state"] as? String else { return }
+              let attributes = newState["attributes"] as? [String: Any] else { return }
 
-        if changedEntityID == entityID {
-            handleVolumeStateChange(stateValue)
-        } else if changedEntityID == muteEntityID {
-            handleMuteStateChange(stateValue)
+        if let vol = Self.parseVolumeLevel(attributes["volume_level"]) {
+            handleVolumeChange(vol)
+        }
+        if attributes["is_volume_muted"] != nil {
+            handleMuteChange(Self.parseMuteFlag(attributes["is_volume_muted"]))
         }
     }
 
-    private func handleVolumeStateChange(_ stateValue: String) {
-        guard let vol = Self.parseVolumeState(stateValue) else { return }
-        Log.d("[HA WS] Volume entity changed → \(vol)")
+    private func handleVolumeChange(_ vol: Int) {
+        Log.d("[HA WS] Volume changed → \(vol)")
 
         // Suppress echoes from our own commands
         let elapsed = Date().timeIntervalSince(lastLocalVolumeChange)
@@ -446,9 +515,8 @@ class HomeAssistantManager: ObservableObject {
         }
     }
 
-    private func handleMuteStateChange(_ stateValue: String) {
-        let muted = Self.parseMuteState(stateValue)
-        Log.d("[HA WS] Mute entity changed → \(muted)")
+    private func handleMuteChange(_ muted: Bool) {
+        Log.d("[HA WS] Mute changed → \(muted)")
 
         // Suppress echoes from our own commands
         let elapsed = Date().timeIntervalSince(lastLocalMuteChange)

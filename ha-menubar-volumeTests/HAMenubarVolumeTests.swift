@@ -42,73 +42,120 @@ struct HomeAssistantManagerTests {
         }
     }
 
-    // MARK: parseVolumeState
+    // MARK: parseVolumeLevel
 
-    @Suite("parseVolumeState")
+    @Suite("parseVolumeLevel")
     struct ParseVolumeTests {
         @Test("0.6 → 60")
         func typical() {
-            #expect(HomeAssistantManager.parseVolumeState("0.6") == 60)
+            #expect(HomeAssistantManager.parseVolumeLevel(0.6) == 60)
         }
 
         @Test("0.0 → 0")
         func zero() {
-            #expect(HomeAssistantManager.parseVolumeState("0.0") == 0)
+            #expect(HomeAssistantManager.parseVolumeLevel(0.0) == 0)
         }
 
         @Test("1.0 → 100")
         func full() {
-            #expect(HomeAssistantManager.parseVolumeState("1.0") == 100)
+            #expect(HomeAssistantManager.parseVolumeLevel(1.0) == 100)
         }
 
         @Test("0.295 rounds to 30, not 29")
         func roundingUp() {
-            #expect(HomeAssistantManager.parseVolumeState("0.295") == 30)
+            #expect(HomeAssistantManager.parseVolumeLevel(0.295) == 30)
         }
 
         @Test("0.504 rounds to 50")
         func roundingDown() {
-            #expect(HomeAssistantManager.parseVolumeState("0.504") == 50)
+            #expect(HomeAssistantManager.parseVolumeLevel(0.504) == 50)
         }
 
-        @Test("unavailable returns nil")
-        func unavailable() {
-            #expect(HomeAssistantManager.parseVolumeState("unavailable") == nil)
+        @Test("nil (attribute absent) returns nil")
+        func absent() {
+            #expect(HomeAssistantManager.parseVolumeLevel(nil) == nil)
         }
 
-        @Test("empty string returns nil")
-        func empty() {
-            #expect(HomeAssistantManager.parseVolumeState("") == nil)
-        }
-
-        @Test("non-numeric string returns nil")
+        @Test("non-numeric value returns nil")
         func nonNumeric() {
-            #expect(HomeAssistantManager.parseVolumeState("unknown") == nil)
+            #expect(HomeAssistantManager.parseVolumeLevel("unknown") == nil)
         }
     }
 
-    // MARK: parseMuteState
+    // MARK: parseMuteFlag
 
-    @Suite("parseMuteState")
+    @Suite("parseMuteFlag")
     struct ParseMuteTests {
-        @Test("on → true")
+        @Test("true → true")
         func muteOn() {
-            #expect(HomeAssistantManager.parseMuteState("on") == true)
+            #expect(HomeAssistantManager.parseMuteFlag(true) == true)
         }
 
-        @Test("off → false")
+        @Test("false → false")
         func muteOff() {
-            #expect(HomeAssistantManager.parseMuteState("off") == false)
+            #expect(HomeAssistantManager.parseMuteFlag(false) == false)
         }
 
-        @Test("unexpected value defaults to false")
+        @Test("nil (attribute absent) defaults to false")
+        func absent() {
+            #expect(HomeAssistantManager.parseMuteFlag(nil) == false)
+        }
+
+        @Test("unexpected type defaults to false")
         func unexpected() {
-            #expect(HomeAssistantManager.parseMuteState("unknown") == false)
+            #expect(HomeAssistantManager.parseMuteFlag("on") == false)
+        }
+    }
+
+    // MARK: supportsVolumeSet
+
+    @Suite("supportsVolumeSet")
+    struct SupportsVolumeTests {
+        @Test("VOLUME_SET bit present → true")
+        func volumeSet() {
+            #expect(HomeAssistantManager.supportsVolumeSet(4) == true)
         }
 
-        @Test("unavailable defaults to false")
-        func unavailable() {
-            #expect(HomeAssistantManager.parseMuteState("unavailable") == false)
+        @Test("typical media_player mask with volume → true")
+        func combinedMask() {
+            // PAUSE(1) | VOLUME_SET(4) | VOLUME_MUTE(8) = 13
+            #expect(HomeAssistantManager.supportsVolumeSet(13) == true)
+        }
+
+        @Test("mask without VOLUME_SET → false")
+        func noVolume() {
+            // PAUSE(1) | PLAY(16384) — no volume bit
+            #expect(HomeAssistantManager.supportsVolumeSet(16385) == false)
+        }
+
+        @Test("zero → false")
+        func zero() {
+            #expect(HomeAssistantManager.supportsVolumeSet(0) == false)
+        }
+
+        @Test("nil → false")
+        func absent() {
+            #expect(HomeAssistantManager.supportsVolumeSet(nil) == false)
+        }
+    }
+
+    // MARK: displayName(forEntityID:)
+
+    @Suite("displayName fallback")
+    struct DisplayNameTests {
+        @Test("single word entity")
+        func single() {
+            #expect(HomeAssistantManager.displayName(forEntityID: "media_player.master") == "Master")
+        }
+
+        @Test("multi-word slug is title-cased and spaced")
+        func multiWord() {
+            #expect(HomeAssistantManager.displayName(forEntityID: "media_player.living_room") == "Living Room")
+        }
+
+        @Test("no domain prefix")
+        func noDomain() {
+            #expect(HomeAssistantManager.displayName(forEntityID: "whole_house") == "Whole House")
         }
     }
 }
