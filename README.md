@@ -24,13 +24,6 @@ The app reads the `volume_level` and `is_volume_muted` attributes of one `media_
 - **Mute toggle** via `media_player.volume_mute`
 - **+/− step buttons** for fine 5% adjustments (auto-unmutes)
 - **Global hotkey** — ⌥⌘V toggles the popover from anywhere
-- **Right-click menu** on the status icon — About, Check for Updates, Quit
-- **Settings panel** — configure HA URL, token, and entity IDs without editing code
-- **Launch at login** — toggle in Settings to start automatically after a reboot
-- **Automatic updates** — built-in [Sparkle](https://sparkle-project.org) updater checks daily and on demand
-- **Token stored in the Keychain** — not plaintext UserDefaults
-- **Live connection indicator** with error display
-- **Syncs state on launch** and stays in sync via WebSocket
 
 ## Setup
 
