@@ -15,7 +15,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Select Xcode
         run: |
@@ -58,7 +58,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=YES
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Run tests
         run: |
@@ -71,6 +71,15 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
+
+      # Ad-hoc sign so macOS doesn't report the download as "damaged" on Apple
+      # Silicon. This is not Developer ID / notarization — first launch still
+      # shows the "unidentified developer" prompt (right-click → Open).
+      - name: Ad-hoc code sign
+        run: |
+          APP="build/Build/Products/Release/Home Assistant Volume.app"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
 
       - name: Create DMG
         run: |
@@ -86,7 +95,7 @@ jobs:
             "ha-menubar-volume.dmg"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ha-menubar-volume-dmg
           path: ha-menubar-volume.dmg
@@ -120,7 +129,7 @@ jobs:
 
       - name: Attach assets to release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             ha-menubar-volume.dmg
