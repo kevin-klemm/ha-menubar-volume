@@ -62,3 +62,7 @@ Click the gear icon in the popover footer to enter your HA base URL, access toke
 Flip **Launch at login** in the same Settings panel to have the app start automatically after a reboot — no need to launch it manually each time. Keep `Home Assistant Volume.app` in your Applications folder so the login item points at a stable location.
 
 The app checks for updates automatically (daily) and via **Check for Updates…** in the right-click menu.
+
+## License
+
+[MIT](LICENSE) © 2026 Kevin Klemm
