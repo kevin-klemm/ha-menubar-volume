@@ -15,7 +15,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Select Xcode
         run: |
@@ -95,7 +95,7 @@ jobs:
             "ha-menubar-volume.dmg"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ha-menubar-volume-dmg
           path: ha-menubar-volume.dmg
